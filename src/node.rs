@@ -1,3 +1,5 @@
+extern crate serde_json;
+
 use std::boxed::FnBox;
 use std::time::{Duration, Instant};
 use std::sync::Arc;
@@ -5,58 +7,15 @@ use std::collections::HashMap;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use raft::eraftpb::{EntryType, Message as RaftMessage};
-use raft::{self, Config, RawNode, SnapshotStatus, Storage as RaftStorage};
+use raft::{self, Config, RawNode, Storage as RaftStorage};
 use rocksdb::{Writable, WriteBatch, WriteOptions, DB};
 use serde::{Deserialize, Serialize};
-use serde_json;
+use protobuf::{Message};
 
-use util::*;
-use storage::*;
-use keys::*;
-use transport::*;
-
-// op: read 1, write 2, delete 3.
-// op: status 128
-#[derive(Serialize, Deserialize, Default)]
-pub struct Request {
-    pub id: u64,
-    pub op: u32,
-    pub row: Row,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-pub struct Response {
-    pub id: u64,
-    pub ok: bool,
-    pub op: u32,
-    pub value: Option<Vec<u8>>,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-pub struct Status {
-    pub leader_id: u64,
-    pub id: u64,
-    pub first_index: u64,
-    pub last_index: u64,
-    pub term: u64,
-    pub apply_index: u64,
-    pub commit_index: u64,
-}
-
-pub type RequestCallback = Box<FnBox(Response) + Send>;
-
-pub enum Msg {
-    Propose {
-        request: Request,
-        cb: RequestCallback,
-    },
-    Raft(RaftMessage),
-    ReportUnreachable(u64),
-    ReportSnapshot {
-        id: u64,
-        status: SnapshotStatus,
-    },
-}
+use crate::util::*;
+use crate::storage::Storage;
+use crate::keys::*;
+use crate::transport::{Request, Response, Status, RequestCallback, Msg, Transport};
 
 pub struct Node {
     tag: String,
@@ -72,7 +31,6 @@ impl Node {
         let storage = Storage::new(id, db.clone());
         let cfg = Config {
             id: id,
-            peers: vec![],
             election_tick: 10,
             heartbeat_tick: 3,
             max_size_per_msg: 1024 * 1024 * 1024,
@@ -82,7 +40,7 @@ impl Node {
             ..Default::default()
         };
 
-        let r = RawNode::new(&cfg, storage, &[]).unwrap();
+        let r = RawNode::new(&cfg, storage, vec![]).unwrap();
 
         Node {
             tag: format!("[{}]", id),
@@ -133,8 +91,8 @@ impl Node {
                     return;
                 }
 
-                let data = serde_json::to_vec(&request).unwrap();
-                self.r.propose(data, false).unwrap();
+                let data = request.to_data().unwrap();
+                self.r.propose(vec![], data).unwrap();
                 self.cbs.insert(request.id, cb);
             }
             Msg::ReportUnreachable(id) => self.r.report_unreachable(id),
@@ -176,12 +134,13 @@ impl Node {
 
         // HardState Changed, persist it.
         if let Some(ref hs) = ready.hs {
-            put_msg(&wb, RAFT_HARD_STATE_KEY, hs);
+            let value = hs.write_to_bytes().unwrap();
+            wb.put(RAFT_HARD_STATE_KEY, &value).unwrap();
         }
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        self.db.write_opt(wb, &write_opts).unwrap();
+        self.db.write_opt(&wb, &write_opts).unwrap();
 
         {
             // Send Messages if possible.
@@ -208,9 +167,11 @@ impl Node {
                 }
 
                 if entry.get_entry_type() == EntryType::EntryNormal {
-                    let request: Request = serde_json::from_slice(entry.get_data()).unwrap();
+
+                    let request: Request = Request::from_data(entry.get_data()).unwrap();
                     self.on_request(request);
                 }
+                // TODO: hanlde EntryConfChange (see @xuyang2's branch)
             }
 
             if last_applying_idx > 0 {

@@ -1,6 +1,4 @@
-#![feature(rustc_private)]
-#![feature(plugin, decl_macro)]
-#![plugin(rocket_codegen)]
+#![feature(proc_macro_hygiene, decl_macro)]
 #![feature(fnbox)]
 
 extern crate byteorder;
@@ -16,8 +14,8 @@ extern crate reqwest;
 extern crate rocket;
 extern crate rocksdb;
 extern crate serde;
+extern crate failure;
 #[macro_use]
-extern crate serde_derive;
 extern crate serde_json;
 
 use std::sync::Arc;
@@ -33,12 +31,10 @@ mod util;
 mod node;
 mod transport;
 
-use http::*;
+use http::run_raft_server;
 
 fn main() {
     env_logger::init();
-
-    info!("hello raft!!!");
 
     let matches = App::new("raft example")
         .version("0.1")
@@ -88,7 +84,7 @@ fn main() {
     let items: Vec<&str> = addr.split(":").collect();
     let port = items[1].parse::<u16>().unwrap();
 
-    error!("start server {}, listen {}", id, port);
+    info!("start server {}, listen {}", id, port);
     run_raft_server(port, id, db, node_addrs);
 }
 

@@ -8,8 +8,8 @@ use protobuf::Message;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-use util::*;
-use keys::*;
+use crate::util::*;
+use crate::keys::*;
 
 pub struct Storage {
     tag: String,
@@ -19,7 +19,7 @@ pub struct Storage {
     last_index: u64,
     last_term: u64,
     pub apply_index: u64,
-    conf_state: ConfState,
+    pub conf_state: ConfState,
 }
 
 impl Storage {
@@ -113,10 +113,12 @@ impl Storage {
 impl RaftStorage for Storage {
     fn initial_state(&self) -> RaftResult<RaftState> {
         let hard = get_msg(&self.db, RAFT_HARD_STATE_KEY).unwrap_or_default();
-        Ok(RaftState {
-            hard_state: hard,
-            conf_state: self.conf_state.clone(),
-        })
+        Ok(
+            RaftState{
+                hard_state: hard,
+                conf_state: self.conf_state.clone(),
+            }
+        )
     }
 
     fn entries(&self, low: u64, high: u64, max_size: u64) -> RaftResult<Vec<Entry>> {
@@ -248,5 +250,5 @@ pub fn try_init_cluster(db: &Arc<DB>, id: u64, nodes: &[u64]) {
 
     let mut write_opts = WriteOptions::new();
     write_opts.set_sync(true);
-    db.write_opt(wb, &write_opts).unwrap();
+    db.write_opt(&wb, &write_opts).unwrap();
 }

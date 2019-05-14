@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 
-use protobuf::{Message, MessageStatic};
+use protobuf::{Message};
 use rocksdb::{DBIterator, ReadOptions, Writable, DB};
 use byteorder::{BigEndian, ByteOrder};
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-use keys::*;
+use crate::keys::{RAFT_TRUNCATED_STATE_KEY};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct Row {
@@ -45,7 +45,7 @@ pub fn get_u64(db: &Arc<DB>, key: &[u8]) -> Option<u64> {
 
 pub fn get_msg<M>(db: &Arc<DB>, key: &[u8]) -> Option<M>
 where
-    M: Message + MessageStatic,
+    M: Message,
 {
     let value = db.get(key).unwrap();
 
@@ -68,8 +68,8 @@ where
     F: FnMut(&[u8], &[u8]) -> bool,
 {
     let mut opts = ReadOptions::new();
-    opts.set_iterate_lower_bound(start_key);
-    opts.set_iterate_upper_bound(end_key);
+    opts.set_iterate_lower_bound(start_key.to_vec());
+    opts.set_iterate_upper_bound(end_key.to_vec());
 
     unsafe {
         let snap = db.unsafe_snap();
@@ -89,7 +89,7 @@ where
 
 pub fn seek(db: &Arc<DB>, start_key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     let mut opts = ReadOptions::new();
-    opts.set_iterate_lower_bound(start_key);
+    opts.set_iterate_lower_bound(start_key.to_vec());
     let mut it = DBIterator::new(Arc::clone(db), opts);
     it.seek(start_key.into());
     if !it.valid() {
@@ -101,7 +101,7 @@ pub fn seek(db: &Arc<DB>, start_key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
 
 pub fn seek_for_prev(db: &Arc<DB>, end_key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     let mut opts = ReadOptions::new();
-    opts.set_iterate_upper_bound(end_key);
+    opts.set_iterate_upper_bound(end_key.to_vec());
     let mut it = DBIterator::new(Arc::clone(db), opts);
     it.seek_for_prev(end_key.into());
     if !it.valid() {

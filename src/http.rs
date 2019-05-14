@@ -5,18 +5,18 @@ use std::time::Duration;
 
 use rocket::config::{Config, Environment};
 use rocket::http::Status;
-use rocket::{self, State};
+use rocket::{self, Data, State, get, post, delete, put, routes};
 use rocket::response::status::{Custom, NotFound};
-use protobuf::{Message, MessageStatic};
+use protobuf::{Message};
 use raft::eraftpb::Message as RaftMessage;
 use crossbeam_channel::{self, Sender};
 use rocksdb::DB;
 use rand::{self, Rng};
 
-use node::*;
-use transport::*;
-use keys::*;
-use util::*;
+use crate::node::*;
+use crate::transport::{Request, Response, Msg, Transport};
+use crate::keys::*;
+use crate::util::*;
 
 pub struct RaftServer {
     sender: Sender<Msg>,
@@ -97,18 +97,18 @@ fn kv_get(state: State<RaftServer>, key: String) -> Result<String, Custom<String
 }
 
 #[put("/kv/<key>", data = "<value>")]
-fn kv_put(state: State<RaftServer>, key: String, value: String) -> Result<(), Custom<String>> {
+fn kv_put(state: State<RaftServer>, key: String, value: Data) -> Result<(), Custom<String>> {
     kv_post(state, key, value)
 }
 
 #[post("/kv/<key>", data = "<value>")]
-fn kv_post(state: State<RaftServer>, key: String, value: String) -> Result<(), Custom<String>> {
+fn kv_post(state: State<RaftServer>, key: String, value: Data) -> Result<(), Custom<String>> {
     let s = state;
     let req = Request {
         op: 2,
         row: Row {
             key: data_key(&key.as_bytes()),
-            value: value.into_bytes(),
+            value: value.peek().to_vec(),
         },
         ..Default::default()
     };
@@ -119,7 +119,7 @@ fn kv_post(state: State<RaftServer>, key: String, value: String) -> Result<(), C
     } else {
         Err(Custom(
             Status::InternalServerError,
-            format!("meet server error when get {}", key),
+            format!("meet server (post) error when get {}", key),
         ))
     }
 }
@@ -148,11 +148,11 @@ fn kv_delete(state: State<RaftServer>, key: String) -> Result<(), Custom<String>
 }
 
 #[post("/raft", data = "<value>")]
-fn raft_post(state: State<RaftServer>, value: Vec<u8>) -> Result<(), Status> {
+fn raft_post(state: State<RaftServer>, value: Data) -> Result<(), Status> {
     let s = state;
 
     let mut m = RaftMessage::new();
-    m.merge_from_bytes(&value).unwrap();
+    m.merge_from_bytes(&value.peek()).unwrap();
 
     s.sender.send(Msg::Raft(m));
 
@@ -181,7 +181,7 @@ pub fn run_raft_server(port: u16, id: u64, db: Arc<DB>, nodes: HashMap<u64, Stri
         sender: sender,
         db: db,
     };
-    rocket::custom(cfg, false)
+    rocket::custom(cfg)
         .mount(
             "/",
             routes![

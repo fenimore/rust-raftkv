@@ -1,13 +1,77 @@
 use std::collections::HashMap;
 use std::thread;
+use std::boxed::FnBox;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
+use failure::Error;
 use raft::eraftpb::{Message as RaftMessage, MessageType};
+use serde::{Deserialize, Serialize};
 use raft::SnapshotStatus;
 use reqwest;
 use protobuf::Message;
 
-use node::*;
+use crate::util::Row;
+
+
+// op: read 1, write 2, delete 3.
+// op: status 128
+#[derive(Serialize, Deserialize, Default)]
+pub struct Request {
+    pub id: u64,
+    pub op: u32,
+    pub row: Row,
+}
+
+impl Request {
+    // to raft log data
+    pub fn to_data(&self) -> Result<Vec<u8>, Error> {
+        let data = serde_json::to_vec(self)?;
+        Ok(data)
+    }
+    // from raft log data
+    pub fn from_data(data: &[u8]) -> Result<Self, Error> {
+        let req: Request = serde_json::from_slice(data)?;
+        Ok(req)
+    }
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct Response {
+    pub id: u64,
+    pub ok: bool,
+    pub op: u32,
+    pub value: Option<Vec<u8>>,
+}
+
+
+pub type RequestCallback = Box<FnBox(Response) + Send>;
+
+pub enum Msg {
+    Propose {
+        request: Request,
+        cb: RequestCallback,
+    },
+    Raft(RaftMessage),
+    ReportUnreachable(u64),
+    ReportSnapshot {
+        id: u64,
+        status: SnapshotStatus,
+    },
+}
+
+
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct Status {
+    pub leader_id: u64,
+    pub id: u64,
+    pub first_index: u64,
+    pub last_index: u64,
+    pub term: u64,
+    pub apply_index: u64,
+    pub commit_index: u64,
+}
+
 
 pub struct Transport {
     sender: Sender<Msg>,
